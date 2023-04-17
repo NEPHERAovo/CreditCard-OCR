@@ -9,3 +9,5 @@ scripts/image
 scripts/txt
 scripts/text_dst
 runs
+yolov8n.pt
+yolov8s.pt
