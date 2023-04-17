@@ -1,0 +1,11 @@
+datasets
+tests
+yolov5
+YOLOv8
+models
+checkpoints
+__pycache__
+scripts/image
+scripts/txt
+scripts/text_dst
+runs
