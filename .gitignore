@@ -1,8 +1,8 @@
+.gitignore
 datasets
 tests
 yolov5
 YOLOv8
-models
 checkpoints
 __pycache__
 scripts/image
@@ -11,3 +11,4 @@ scripts/text_dst
 runs
 yolov8n.pt
 yolov8s.pt
+backup

@@ -1,107 +1,70 @@
 import torch
-from torch.utils.data import DataLoader
-from torch.nn import CTCLoss
-from tqdm import tqdm
-
-from dataset import Synth90kDataset, synth90k_collate_fn
+from config import *
 from model import CRNN
+from torch.nn import CTCLoss
 from ctc_decoder import ctc_decode
+from torch.utils.data import DataLoader
+from dataset import CardDataset, cardnumber_collate_fn
 
-torch.backends.cudnn.enabled = False
+def process(crnn, dataloader, criterion, device, decode_method, beam_size):
+    total_count = 0
+    total_loss = 0
+    total_correct = 0
+    for data in dataloader:
+        images, targets, target_lengths = [i.to(device) for i in data]
 
+        logits = crnn(images)
+        log_probs = torch.nn.functional.log_softmax(logits, dim=2)
 
-def evaluate(crnn, dataloader, criterion,
-             max_iter=None, decode_method='beam_search', beam_size=10):
-    crnn.eval()
+        batch_size = images.size(0)
+        input_lengths = torch.LongTensor([logits.size(0)] * batch_size)
 
-    tot_count = 0
-    tot_loss = 0
-    tot_correct = 0
-    wrong_cases = []
+        loss = criterion(log_probs, targets, input_lengths, target_lengths)
+        preds = ctc_decode(log_probs, method=decode_method, beam_size=beam_size)
+        reals = targets.cpu().detach().numpy().tolist()
+        target_lengths = target_lengths.cpu().detach().numpy().tolist()
 
-    pbar_total = max_iter if max_iter else len(dataloader)
-    pbar = tqdm(total=pbar_total, desc="Evaluate")
+        total_count += batch_size
+        total_loss += loss.item()
+        target_length_counter = 0
+        for pred, target_length in zip(preds, target_lengths):
+            real = reals[target_length_counter:target_length_counter + target_length]
+            target_length_counter += target_length
+            if pred == real:
+                total_correct += 1
+            # else:
+            #     wrong_cases.append((real, pred))
+    return total_loss / total_count, total_correct / total_count
 
-    with torch.no_grad():
-        for i, data in enumerate(dataloader):
-            if max_iter and i >= max_iter:
-                break
-            device = 'cuda' if next(crnn.parameters()).is_cuda else 'cpu'
-
-            images, targets, target_lengths = [d.to(device) for d in data]
-
-            logits = crnn(images)
-            log_probs = torch.nn.functional.log_softmax(logits, dim=2)
-
-            batch_size = images.size(0)
-            input_lengths = torch.LongTensor([logits.size(0)] * batch_size)
-
-            loss = criterion(log_probs, targets, input_lengths, target_lengths)
-
-            preds = ctc_decode(log_probs, method=decode_method, beam_size=beam_size)
-            reals = targets.cpu().detach().numpy().tolist()
-            target_lengths = target_lengths.cpu().detach().numpy().tolist()
-
-            tot_count += batch_size
-            tot_loss += loss.item()
-            target_length_counter = 0
-            for pred, target_length in zip(preds, target_lengths):
-                real = reals[target_length_counter:target_length_counter + target_length]
-                target_length_counter += target_length
-                if pred == real:
-                    tot_correct += 1
-                else:
-                    wrong_cases.append((real, pred))
-
-            pbar.update(1)
-        pbar.close()
-
-    evaluation = {
-        'loss': tot_loss / tot_count,
-        'acc': tot_correct / tot_count,
-        'wrong_cases': wrong_cases
-    }
-    return evaluation
-
-
-def main():
-    eval_batch_size = 32
-    cpu_workers = 0
-    reload_checkpoint = 'crnn.pt'
-
-    img_height = 32
-    img_width = 500
-    data_dir = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition\processed'
-
+def evaluate(crnn, data_dir):
+    test_dataset = CardDataset(image_dir=data_dir+'/test', mode='val',img_height=img_height, img_width=img_width)
+    val_dataset = CardDataset(image_dir=data_dir+'/val', mode='val',img_height=img_height, img_width=img_width)
+    test_loader = DataLoader(dataset=test_dataset,batch_size=eval_batch_size,shuffle=True,num_workers=num_workers,collate_fn=cardnumber_collate_fn)
+    val_loader = DataLoader(dataset=val_dataset,batch_size=eval_batch_size,shuffle=True,num_workers=num_workers,collate_fn=cardnumber_collate_fn)
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'device: {device}')
-
-    test_dataset = Synth90kDataset(root_dir=data_dir, image_dir=data_dir+'/val',mode='test',
-                                   img_height=img_height, img_width=img_width)
-
-    test_loader = DataLoader(
-        dataset=test_dataset,
-        batch_size=eval_batch_size,
-        shuffle=False,
-        num_workers=cpu_workers,
-        collate_fn=synth90k_collate_fn)
-
-    num_class = len(Synth90kDataset.LABEL2CHAR) + 1
-    crnn = CRNN(1, img_height, img_width, num_class,
-                map_to_seq_hidden=64,
-                rnn_hidden=256,
-                leaky_relu=False)
-    crnn.load_state_dict(torch.load(reload_checkpoint, map_location=device))
-    crnn.to(device)
-
+    # print(f'device: {device}')
     criterion = CTCLoss(reduction='sum')
     criterion.to(device)
+    crnn.eval()
 
-    evaluation = evaluate(crnn, test_loader, criterion,
-                          decode_method='greedy',
-                          beam_size=10)
-    print('test_evaluation: loss={loss}, acc={acc}'.format(**evaluation))
+    # wrong_cases = []
+    with torch.no_grad():
+        val_loss, accuracy = process(crnn, test_loader, criterion, device, decode_method, beam_size)
+        fake_loss, fake_accu = process(crnn, val_loader, criterion, device, decode_method, beam_size)
+        # print('wrong_cases: ', wrong_cases)
+    return val_loss, accuracy, fake_loss, fake_accu
+    
 
-
-if __name__ == '__main__':
-    main()
+if __name__ ==  '__main__':
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    data_dir = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition\processed'
+    crnn = CRNN(1, 32, 512, 11)
+    crnn.load_state_dict(torch.load('./runs/recognition/run3/checkpoints/crnn best.pt', map_location=device))
+    # crnn.load_state_dict(torch.load('crnn 69000.pt', map_location=device))
+    crnn.to(device)
+    test_loss, accuracy,val_loss,val_accu = evaluate(crnn, data_dir)
+    print('test_loss: ', val_loss)
+    print('accuracy: ', accuracy)
+    print('val_loss: ', val_loss)
+    print('val_accu: ', val_accu)

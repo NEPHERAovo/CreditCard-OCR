@@ -2,9 +2,10 @@ from PyQt5.QtWidgets import QApplication, QMainWindow,QHBoxLayout, QVBoxLayout,Q
 from PyQt5.QtGui import QPixmap, QImage
 from ultralytics import YOLO
 from PIL import Image
-from crnn.test_pred import predict
+from crnn.predict import predict
 from process_result import get_info
-
+from rectify import rectify
+import csv
 import sys
 import os
 
@@ -13,8 +14,12 @@ class OCR_Window(QMainWindow):
         super().__init__()
         self.setWindowTitle("Bank Card / Credi Card OCR System")
         self.resize(800, 600)
+        self.image = None
+        self.image_path = None
+        self.saves = []
+        self.filename = None
 
-        self.yolo = YOLO("./yolo_best.pt")
+        self.yolo = YOLO("./models/yolo_best.pt")
         self.init_gui()
 
     def init_gui(self):
@@ -92,6 +97,10 @@ class OCR_Window(QMainWindow):
         self.load_button.clicked.connect(self.load_image)
         button_layout.addWidget(self.load_button)
 
+        self.rectify_button = QPushButton('Rectify Image', self)
+        self.rectify_button.clicked.connect(self.rectify_image)
+        button_layout.addWidget(self.rectify_button)
+
         self.process_button = QPushButton('Process Image', self)
         self.process_button.clicked.connect(self.process_image)
         button_layout.addWidget(self.process_button)
@@ -105,7 +114,7 @@ class OCR_Window(QMainWindow):
         button_layout.addWidget(self.down_button)
 
         self.save_button = QPushButton('Save', self)
-        # self.save_button.clicked.connect(self.image_save)
+        self.save_button.clicked.connect(self.save_result)
         button_layout.addWidget(self.save_button)
         main_layout.addLayout(button_layout)
 
@@ -119,11 +128,30 @@ class OCR_Window(QMainWindow):
         pixmap = QPixmap(file_path)
         self.image_label.setPixmap(pixmap.scaled(self.image_label.width(), self.image_label.height()))
 
-        self.image_file_path = file_path
+        self.image_path = file_path
+        self.filename = os.path.basename(file_path)
+
+    def rectify_image(self):
+        try:
+            self.clear_result()
+            self.image = rectify(self.image_path)
+            height, width, _ = self.image.shape
+            bytesPerLine = 3 * width
+            pixmap = QPixmap(QImage(self.image.data, width, height, bytesPerLine, QImage.Format_BGR888))
+            self.image_label.setPixmap(pixmap.scaled(self.image_label.width(), self.image_label.height()))
+            self.image = self.image[:, :, ::-1]
+            self.image = Image.fromarray(self.image)
+        except:
+            msg = QMessageBox(QMessageBox.Critical, '错误', '矫正失败')
+            msg.exec_()
 
     def process_image(self):
-        result = self.yolo(self.image_file_path)
-        image = Image.open(self.image_file_path)
+        if self.image is None:
+            result = self.yolo(self.image_path)
+            image = Image.open(self.image_path)
+        else:
+            result = self.yolo(self.image)
+            image = self.image
 
         res_plotted = result[0].plot()
 
@@ -131,42 +159,62 @@ class OCR_Window(QMainWindow):
         confidences = result[0].boxes.conf.to('cpu').numpy().astype(float)
         labels = result[0].boxes.cls.to('cpu').numpy().astype(int) 
 
+        temp = ['','','','','','']
+        temp[0] = self.filename
         for box, conf, label in zip(boxes, confidences, labels):
             if conf > 0.5:
                 x_min, y_min, x_max, y_max = box
                 image_crop = image.crop((x_min,y_min, x_max,y_max))
-                result = predict(image_crop)
-                print(result)
                 result_text = ''
-                for i in result[0]:
-                    result_text = result_text + i
-                # image_crop.convert('RGB').save('card.jpg')
-                if label == 0 and conf > 0.7:
+                if label == 0 and conf > 0.55:
+                    result = predict(image_crop,category='card_number')
+                    print(result)
+                    # image_crop.convert('RGB').save('card.jpg')
+                    for i in result[0]:
+                        if i != '/':
+                            result_text = result_text + i
                     self.card_number_result.setPlainText(result_text)
+                    temp[1] = result_text
                     processed_result = get_info(result_text)
                     self.bank_name_result.setPlainText(processed_result[0])
+                    temp[3] = processed_result[0]
                     if processed_result[1] == 'DC':
                         self.card_type_result.setPlainText('储蓄卡')
+                        temp[4] = '储蓄卡'
                     elif processed_result[1] == 'CC':
                         self.card_type_result.setPlainText('信用卡')
+                        temp[4] = '信用卡'
                     elif processed_result[1] == 'SCC':
                         self.card_type_result.setPlainText('准贷记卡')
+                        temp[4] = '准贷记卡'
                     elif processed_result[1] == 'PC':
                         self.card_type_result.setPlainText('预付费卡')
+                        temp[4] = '预付费卡'
                     else:
                         self.card_type_result.setPlainText(processed_result[1])
-                    self.is_unionpay_result.setPlainText(processed_result[2])
-                else:
-                    if len(result_text) == 4:
-                        result_text = result_text[0:2] + '/' + result_text[2:4]
-                    elif len(result_text) == 5:
-                        result_text = result_text[0:2] + '/' + result_text[3:5]
-                    # elif len(result_text) == 6:
-                    #     result_text = result_text[0:2] + '/' + result_text[2:6]
-                    elif len(result_text) == 7:
-                        result_text = result_text[0:4] + '/' + result_text[5:7]
-                    self.valid_date_result.setPlainText(result_text)
-
+                        temp[4] = processed_result[1]
+                    if self.is_unionpay_result.toPlainText() == '':
+                        self.is_unionpay_result.setPlainText(processed_result[2])
+                        temp[5] = processed_result[2]
+                elif label == 1:
+                    result = predict(image_crop,category='date')
+                    print(result)
+                    for i in result[0]:
+                        result_text = result_text + i
+                    date_result = self.valid_date_result.toPlainText()
+                    if date_result == '':
+                        self.valid_date_result.setPlainText(result_text)
+                        temp[2] = result_text
+                    else:
+                        if int(date_result.split('/')[-1]) < int(result_text.split('/')[-1]):
+                            self.valid_date_result.setPlainText(result_text)
+                            temp[2] = result_text
+                elif label == 2:
+                    self.is_unionpay_result.setPlainText('是(图中存在)')
+                    temp[5] = '是(图中存在)'
+                    
+        if temp not in self.saves:
+            self.saves.append(temp)
         height, width, _ = res_plotted.shape
         bytesPerLine = 3 * width
         self.image_label.setPixmap(QPixmap(QImage(res_plotted.data, width, height, bytesPerLine, QImage.Format_BGR888)).scaled(self.image_label.width(), self.image_label.height()))
@@ -174,13 +222,13 @@ class OCR_Window(QMainWindow):
     def image_up(self):
         self.clear_result()
         try:
-            path = os.path.split(self.image_file_path)
+            path = os.path.split(self.image_path)
             image_name = os.listdir(path[0])
             n = image_name.index(path[1])
             n = n - 1
             if n < 0:
                 n = len(image_name) - 1
-            self.image_file_path = path[0] + '/' + image_name[n]
+            self.image_path = path[0] + '/' + image_name[n]
             if image_name[n].split('.')[-1] in ['jpg','png','jpeg']:
                 self.process_image()
             else:
@@ -192,19 +240,34 @@ class OCR_Window(QMainWindow):
     def image_down(self):
         self.clear_result()
         try:
-            path = os.path.split(self.image_file_path)
+            path = os.path.split(self.image_path)
             image_name = os.listdir(path[0])
             n = image_name.index(path[1])
             n = n + 1
             if n >= len(image_name):
                 n = 0
-            self.image_file_path = path[0] + '/' + image_name[n]
+            self.image_path = path[0] + '/' + image_name[n]
             if image_name[n].split('.')[-1] in ['jpg','png','jpeg']:
                 self.process_image()
             else:
                 self.image_down()
         except:
             msg = QMessageBox(QMessageBox.Critical, '错误', '未读入图片')
+            msg.exec_()
+    
+    def save_result(self):
+        try:
+            with open('result.csv', 'a', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                if f.tell() == 0:
+                    writer.writerow(['文件名','卡号','有效期','发卡行','卡类型','是否银联'])
+                for i in self.saves:
+                    writer.writerow(i)
+            msg = QMessageBox(QMessageBox.Information, '提示', '保存成功')
+            msg.exec_()
+            self.saves = []
+        except:
+            msg = QMessageBox(QMessageBox.Critical, '错误', '保存失败')
             msg.exec_()
 
     def clear_result(self):
@@ -213,6 +276,7 @@ class OCR_Window(QMainWindow):
         self.card_type_result.setPlainText('')
         self.valid_date_result.setPlainText('')
         self.is_unionpay_result.setPlainText('')
+        self.image = None
 
 if __name__ == "__main__":
     app = QApplication([])

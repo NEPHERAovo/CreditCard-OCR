@@ -1,35 +1,21 @@
-
-common_config = {
-    'data_dir': '../data/labels',
-    'img_width': 100,
-    'img_height': 32,
-    'map_to_seq_hidden': 64,
-    'rnn_hidden': 256,
-    'leaky_relu': False,
-}
-
-train_config = {
-    'epochs': 10000,
-    'train_batch_size': 32,
-    'eval_batch_size': 512,
-    'lr': 0.0005,
-    'show_interval': 10,
-    'valid_interval': 500,
-    'save_interval': 1000,
-    'cpu_workers': 4,
-    'reload_checkpoint': None,
-    'valid_max_iter': 100,
-    'decode_method': 'greedy',
-    'beam_size': 10,
-    'checkpoints_dir': 'checkpoints/'
-}
-train_config.update(common_config)
-
-evaluate_config = {
-    'eval_batch_size': 512,
-    'cpu_workers': 4,
-    'reload_checkpoint': 'checkpoints/crnn_synth90k.pt',
-    'decode_method': 'beam_search',
-    'beam_size': 10,
-}
-evaluate_config.update(common_config)
+data_dir = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition/processed/card-number/attempt'
+img_width = 128
+img_height = 32
+epochs = 100
+train_batch_size = 64
+lr = 0.0001
+reload_checkpoint = None
+early_stop = 50
+eval_batch_size = 32
+decode_method = 'greedy'
+beam_size = 10
+num_workers = 0
+map_to_seq_hidden = 64
+rnn_hidden = 256
+leaky_relu = False
+# adam / sgd / rmsprop
+optim_config = 'adam'
+# ResNet / LCNet / MobileNet
+backbone = 'LCNet'
+CHARS = '0123456789/'
+num_class = len(CHARS) + 1

@@ -2004,8 +2004,8 @@ def get_info(card_number):
     for bank in banks:
         for pattern in bank['patterns']:
             if re.match(pattern['reg'], card_number):
-                return bank['bankName'], pattern['cardType'], '是'
-    return ['未知', '未知', '未知']
+                return bank['bankName'], pattern['cardType'], '未知(未检出)'
+    return ['未知', '未知', '未知(未检出)']
 
 if __name__ == '__main__':
     print(get_info('6228480402564890018'))

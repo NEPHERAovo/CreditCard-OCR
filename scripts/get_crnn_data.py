@@ -2,10 +2,35 @@ import os
 import numpy as np
 import cv2
 import random
+import threading
 
-SOURCE_PATH = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition/train_images/'
-DESTINATION_PATH = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition/processed/'
+SOURCE_PATH = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition/card-number/'
+DESTINATION_PATH = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition/processed/card-number/attempt/'
 
+def perspective_transform(image, dst_points):
+    height, width = image.shape[:2]
+    src_points = np.float32([[0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1]])
+    M = cv2.getPerspectiveTransform(src_points, dst_points)
+    transformed = cv2.warpPerspective(image, M,(width,height))
+
+    return transformed
+
+def random_perspective_points(image):
+    height, width = image.shape[:2]
+    margin = 0.1
+    x_margin = int(width * margin)
+    y_margin = int(height * margin)
+    if y_margin == 0:
+        y_margin = 1
+
+    dst_points = np.float32([
+        [np.random.randint(0, x_margin), np.random.randint(0, y_margin)],
+        [np.random.randint(width - x_margin, width), np.random.randint(0, y_margin)],
+        [np.random.randint(0, x_margin), np.random.randint(height - y_margin, height)],
+        [np.random.randint(width - x_margin, width), np.random.randint(height - y_margin, height)],
+    ])
+
+    return dst_points
 
 def rand(a=0, b=1):
     return np.random.rand() * (b - a) + a
@@ -33,7 +58,7 @@ def rotate(img):
 def rand_resize(img,jitter=.3):
     w, h, _ = img.shape
     new_ar = w / h * rand(1 - jitter, 1 + jitter) / rand(1 - jitter, 1 + jitter)
-    scale = rand(.25, 2)
+    scale = rand(.5, 1.5)
     if new_ar < 1:
         nh = int(scale * h)
         nw = int(nh * new_ar)
@@ -88,15 +113,15 @@ def colormap(img):
     return dst
 
 
-# def blur(img):
-#     img_GaussianBlur = cv2.GaussianBlur(img, (5, 5), 0)
-#     img_Mean = cv2.blur(img, (5, 5))
-#     img_Median = cv2.medianBlur(img, 3)
-#     img_Bilater = cv2.bilateralFilter(img, 5, 100, 100)
+def blur(img):
+    img_GaussianBlur = cv2.GaussianBlur(img, (3, 3), 0)
+    img_Mean = cv2.blur(img, (3, 3))
+    img_Median = cv2.medianBlur(img, 3)
+    img_Bilater = cv2.bilateralFilter(img, 3, 100, 100)
 
-#     result = [img_GaussianBlur, img_Mean, img_Median, img_Bilater]
+    result = [img_GaussianBlur, img_Mean, img_Median, img_Bilater]
 
-#     return result[random.randint(0, 3)]
+    return result[random.randint(0, 3)]
 
 
 def noise(img):
@@ -117,13 +142,15 @@ def noise(img):
 
 def process(img_list, amount):
     for i in range(amount):
-        img_numbers = random.randint(4, 6)
+        # img_numbers = random.randint(4, 6)
+        img_numbers = 1
         chosen_filenames = random.sample(img_list, img_numbers)
         
         dst = []
         file_name = ''
         for img_name in chosen_filenames:
-            file_name += img_name.split('.')[0][0:4]
+            # file_name += img_name.split('.')[0][0:4]
+            file_name += img_name.split('.')[0].split(' ')[0].split('-')[0]
             img = cv2.imread(SOURCE_PATH + img_name,-1)
 
             if random.randint(0, 1) == 0:
@@ -132,15 +159,18 @@ def process(img_list, amount):
                 img = rand_resize(img)
             if random.randint(0, 1) == 0:
                 img = colormap(img)
-            # if random.randint(0, 1) == 0:
-            #     img = blur(img)
             if random.randint(0, 1) == 0:
-                i = random.randint(0, 4)
-                for j in range(i):
-                    img = place_img(img)
+                img = blur(img)
+            # if random.randint(0, 1) == 0:
+            #     i = random.randint(0, 4)
+            #     for j in range(i):
+            #         img = place_img(img)
             
             if random.randint(0, 1) == 0:
                 img = rotate(img)
+            
+            if random.randint(0, 1) == 0:
+                img = perspective_transform(img, random_perspective_points(img))
 
             dst.append(img)
 
@@ -149,7 +179,7 @@ def process(img_list, amount):
         resized_images = [cv2.resize(image, (int(image.shape[1] * max_height / image.shape[0]), max_height)) for image in dst]
 
         dst = np.hstack(resized_images)
-        cv2.imwrite(DESTINATION_PATH + file_name + '-' +str(i) + '.png', dst)
+        cv2.imwrite(DESTINATION_PATH + file_name + '-' +str(random.randint(1,1000)) + '.png', dst)
 
 
 if __name__ == '__main__':
@@ -157,4 +187,11 @@ if __name__ == '__main__':
     train_percent = 0.8
     img_list = os.listdir(SOURCE_PATH)
 
-    process(img_list, 20000)
+    threads = []
+    for i in range(6):
+        t = threading.Thread(target=process, args=(img_list, 3333))
+        threads.append(t)
+        t.start()
+    
+    for t in threads:
+        t.join()

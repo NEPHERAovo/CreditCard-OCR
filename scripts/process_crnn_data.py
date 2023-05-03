@@ -34,6 +34,6 @@ dir_path = "D:/Softwares/Python/CreditCard-OCR/datasets/recognition/processed"
 # Get the list of all image filenames in the directory
 image_filenames = [filename for filename in os.listdir(original_dir_path)]
 
-process(7000,original_dir_path,dir_path+'/train')
-process(1000,original_dir_path,dir_path+'/val')
-process(2000,original_dir_path,dir_path+'/test')
+process(11111,original_dir_path,dir_path+'/train')
+# process(500,original_dir_path,dir_path+'/val')
+# process(500,original_dir_path,dir_path+'/test')

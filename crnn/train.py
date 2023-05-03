@@ -1,14 +1,15 @@
 import os
-
-import cv2
+import csv
 import torch
-from torch.utils.data import DataLoader
+from config import *
+from model import CRNN
 import torch.optim as optim
 from torch.nn import CTCLoss
+from evaluate import evaluate
+from torch.utils.data import DataLoader
+from dataset import CardDataset, cardnumber_collate_fn
 
-from dataset import Synth90kDataset, synth90k_collate_fn
-from model import CRNN
-
+# 训练每个batch
 def train_batch(crnn, data, optimizer, criterion, device):
     crnn.train()
     images, targets, target_lengths = [d.to(device) for d in data]
@@ -27,73 +28,106 @@ def train_batch(crnn, data, optimizer, criterion, device):
     optimizer.step()
     return loss.item()
 
-
 def main():
-    epochs = 100
-    train_batch_size = 32
-
-    lr = 0.0001
-    show_interval = 10
-    valid_interval = 500
-    save_interval = 1000
-    cpu_workers = 0
-    reload_checkpoint = None
-
-    img_width = 512
-    img_height = 32
-    data_dir = 'D:\Softwares\Python\CreditCard-OCR\datasets/recognition\processed'
-
+    # 选择设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'device: {device}')
-
-    train_dataset = Synth90kDataset(root_dir=data_dir,image_dir=data_dir+'/train', mode='train',
+    # 加载数据集和模型
+    train_dataset = CardDataset(image_dir=data_dir+'/train', mode='train',
                                     img_height=img_height, img_width=img_width)
-
-
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_batch_size,
         shuffle=True,
-        num_workers=cpu_workers,
-        collate_fn=synth90k_collate_fn)
-
-
-    num_class = len(Synth90kDataset.LABEL2CHAR) + 1
+        num_workers=num_workers,
+        collate_fn=cardnumber_collate_fn)
+    num_class = len(CardDataset.LABEL2CHAR) + 1
     crnn = CRNN(1, img_height, img_width, num_class,
-                map_to_seq_hidden=64,
-                rnn_hidden=256,
-                leaky_relu=False)
+                map_to_seq_hidden=map_to_seq_hidden,
+                rnn_hidden=rnn_hidden,
+                leaky_relu=leaky_relu,
+                backbone=backbone)
+    print(crnn)
+
     if reload_checkpoint:
         crnn.load_state_dict(torch.load(reload_checkpoint, map_location=device))
     crnn.to(device)
-
-    optimizer = optim.RMSprop(crnn.parameters(), lr=lr)
+    # 优化器和损失函数
+    if optim_config == 'adam':
+        optimizer = optim.Adam(crnn.parameters(), lr=lr)
+    elif optim_config == 'sgd':
+        optimizer = optim.SGD(crnn.parameters(), lr=lr)
+    elif optim_config == 'rmsprop':
+        optimizer = optim.RMSprop(crnn.parameters(), lr=lr)
     criterion = CTCLoss(reduction='sum')
     criterion.to(device)
 
-    assert save_interval % valid_interval == 0 or valid_interval % save_interval ==0
-    i = 1
+    best_accuracy = -1
+    best_epoch = None
+    data = []
+    # 保存路径
+    if not os.path.exists('./runs/recognition'):
+        os.mkdir('./runs/recognition')
+    run = 1
+    while os.path.exists('./runs/recognition/run'+str(run)):
+        run += 1
+    os.mkdir('./runs/recognition/run'+str(run))
+    os.mkdir('./runs/recognition/run'+str(run)+'/checkpoints')
+    save_path = './runs/recognition/run'+str(run)
+
+    # 训练
     for epoch in range(1, epochs + 1):
         print(f'epoch: {epoch}')
-        tot_train_loss = 0.
-        tot_train_count = 0
-        for train_data in train_loader:
+        total_train_loss = 0.
+        total_train_count = 0
+        index = 1
+        length = len(train_loader)
+        # 一个epoch的训练
+        for train_data in train_loader: 
             loss = train_batch(crnn, train_data, optimizer, criterion, device)
             train_size = train_data[0].size(0)
+            total_train_loss += loss
+            total_train_count += train_size
+            print('train_batch_loss[', index, ' / ', length, ']: ', loss / train_size, end="\r")
+            index += 1
+        # 保存数据
+        print('total_train_loss: ', total_train_loss / total_train_count)
+        temp = []
+        temp.append(epoch)
+        temp.append(total_train_loss / total_train_count)
 
-            tot_train_loss += loss
-            tot_train_count += train_size
-            if i % show_interval == 0:
-                print('train_batch_loss[', i, ']: ', loss / train_size)
+        torch.save(crnn.state_dict(), save_path + '/checkpoints/crnn last.pt')
+        # print('save model at ', save_model_path)
+        # 评估该epoch的结果
+        test_loss, accuracy, val_loss, val_accu= evaluate(crnn, data_dir)
+        temp.append(val_loss)
+        temp.append(val_accu)
+        temp.append(test_loss)
+        temp.append(accuracy)
+        data.append(temp)
+        # print(wrong_cases)
+        print('val_loss: ', val_loss)
+        print('val_accu: ', val_accu)
+        print('test_loss: ', test_loss)
+        print('accuracy: ', accuracy)
 
-            if i % save_interval == 0:
-                save_model_path = os.path.join('D:\Softwares\Python\CreditCard-OCR/checkpoints/',"crnn "+str(i)+".pt")
-                torch.save(crnn.state_dict(), save_model_path)
-                print('save model at ', save_model_path)
+        with open(save_path + '/results.csv', 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['epoch','train_loss','val_loss', 'val_accu', 'test_loss', 'accuracy'])
+            writer.writerows(data)
+        # 保存最好的模型
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            best_epoch = epoch
+            torch.save(crnn.state_dict(), save_path + '/checkpoints/crnn best.pt')
+            print('save model at ' + save_path + '/checkpoints/crnn best.pt')
+        # earlystop策略
+        elif epoch - best_epoch > early_stop:
+            print('early stopped because not improved for {} epochs'.format(early_stop))
+            break
 
-            i += 1
-
-        print('train_loss: ', tot_train_loss / tot_train_count)
+    print('best epoch:', best_epoch)
+    print('best accuracy:', best_accuracy)
 
 
 if __name__ == '__main__':
