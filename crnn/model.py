@@ -119,8 +119,8 @@ class CRNN(nn.Module):
             self.cnn, (output_channel, output_height, output_width) = self._cnn_backbone(img_channel, img_height, img_width, leaky_relu)
             self.map_to_seq = nn.Linear(output_channel * output_height, map_to_seq_hidden)
         elif backbone == 'MobileNet':
-            self.cnn, (output_channel, output_height, output_width) = self._cnn_backbone(img_channel, img_height, img_width, leaky_relu)
-            self.map_to_seq = nn.Linear(output_channel * output_height, map_to_seq_hidden)
+            self.cnn = MobileNetV3(mode='large', width_mult=1.0)
+            self.map_to_seq = nn.Linear(512 * (img_height // 16), map_to_seq_hidden)
 
         self.rnn1 = nn.LSTM(map_to_seq_hidden, rnn_hidden, bidirectional=True)
 
